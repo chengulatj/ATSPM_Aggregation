@@ -128,12 +128,21 @@ step3 AS (
     -- phase_with_detector_ByApproach
     -- Combined phase and detector data without duplicating phase data (no need since detector/phases are combined already)
     phase AS (
-        SELECT TimeStamp, 
-            DeviceId, 
-            EventId,
+        SELECT r.TimeStamp as TimeStamp, 
+            r.DeviceId as DeviceId,
+            r.EventId as EventId,
             0 as Detector,
-            Parameter AS Phase 
-        FROM {{from_table}} WHERE EventId IN (1,8,10)
+            r.Parameter AS Phase 
+        FROM {{from_table}} r
+        -- Join is for efficiency, to filter out phases that are not in the detector_config table
+        JOIN (SELECT
+                DISTINCT DeviceId, Phase
+                FROM detector_config
+                WHERE Function = 'Presence'
+                ) c 
+        ON r.DeviceId = c.DeviceId 
+           AND c.Phase = r.Parameter
+        WHERE r.EventId IN (1,8,10)
     )
     SELECT * FROM phase
     UNION ALL
@@ -156,11 +165,21 @@ step3 AS (
             Phase FROM step2
     ),
     phase AS (
-        SELECT TimeStamp, 
-            DeviceId, 
-            EventId, 
-            Parameter AS Phase 
-        FROM raw_data WHERE EventId IN (1,8,10)
+        SELECT r.TimeStamp as TimeStamp, 
+            r.DeviceId as DeviceId,
+            r.EventId as EventId,
+            0 as Detector,
+            r.Parameter AS Phase 
+        FROM {{from_table}} r
+        -- Join is for efficiency, to filter out phases that are not in the detector_config table
+        JOIN (SELECT
+                DISTINCT DeviceId, Phase
+                FROM detector_config
+                WHERE Function = 'Presence'
+                ) c 
+        ON r.DeviceId = c.DeviceId 
+           AND c.Phase = r.Parameter
+        WHERE r.EventId IN (1,8,10)
     ), 
     duplicated_phase AS (
         SELECT TimeStamp, 

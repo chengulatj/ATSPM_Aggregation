@@ -25,12 +25,20 @@ view2 AS (
     -- Combined phase and detector data without duplicating phase data (no need since detector/phases are combined already)
     WITH 
     phase AS (
-        SELECT TimeStamp, 
-            DeviceId, 
-            EventId,
-            Parameter::int16 AS Phase 
-        FROM {{from_table}}
-        WHERE EventId IN (1, 8, 10)
+        SELECT r.TimeStamp as TimeStamp, 
+            r.DeviceId as DeviceId,
+            r.EventId as EventId,
+            r.Parameter::int16 AS Phase 
+        FROM {{from_table}} r
+        -- Join is for efficiency, to filter out phases that are not in the detector_config table
+        JOIN (SELECT
+                DISTINCT DeviceId, Phase
+                FROM detector_config
+                WHERE Function = 'Advance'
+                ) c 
+        ON r.DeviceId = c.DeviceId 
+           AND c.Phase = r.Parameter
+        WHERE r.EventId IN (1,8,10)
     )
     SELECT * FROM phase
     UNION ALL

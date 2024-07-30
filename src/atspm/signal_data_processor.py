@@ -5,6 +5,7 @@ from .data_loader import load_data
 from .data_aggregator import aggregate_data
 from .data_saver import save_data
 from .utils import round_down_15
+from .utils import v_print
 
 
 class SignalDataProcessor:
@@ -42,6 +43,7 @@ class SignalDataProcessor:
         self.device_groups = None # For detector_health aggregation if groups are provided
         self.remove_incomplete = False
         self.to_sql = False
+        self.verbose = 1 # 0: only print errors, 1: print performance, 2: print debug statements
         
         # Extract parameters from kwargs
         for key, value in kwargs.items():
@@ -72,10 +74,19 @@ class SignalDataProcessor:
         # Track whether data has been loaded
         self.data_loaded = False
 
+        # Use connection to get current timestamp
+        # This is a placeholder for when to_sql is True. After the class is instantiated, 
+        # timestamps need to be set by the user for the full_ped query to work.
+        self.max_timestamp = self.conn.execute("SELECT CURRENT_TIMESTAMP").fetchone()[0]
+        self.min_timestamp = self.max_timestamp
+
     def load(self):
         """Loads raw data and detector configuration into DuckDB tables."""
         if self.data_loaded:
-            print("Data already loaded! Reinstantiate the class to reload data.")
+            v_print("Data already loaded! Reinstantiate the class to reload data.", self.verbose)
+            return
+        if self.to_sql:
+            v_print("to_sql option is True, data will not be loaded.", self.verbose)
             return
         try:
             load_data(self.conn,
@@ -83,24 +94,27 @@ class SignalDataProcessor:
                     self.detector_config,
                     self.unmatched_events)
             # delete self.raw_data and self.detector_config to free up memory
+            self.data_loaded = True
+            if self.raw_data is not None:
+                self.min_timestamp = self.conn.execute("SELECT MIN(timestamp) FROM raw_data").fetchone()[0]
+                self.max_timestamp = self.conn.execute("SELECT MAX(timestamp) FROM raw_data").fetchone()[0]
+                v_print(f'Data loaded from {self.min_timestamp} to {self.max_timestamp}', self.verbose)
+            # free up memory
             del self.raw_data
             del self.detector_config
-            self.data_loaded = True
-            self.min_timestamp = self.conn.execute("SELECT MIN(timestamp) FROM raw_data").fetchone()[0]
-            self.max_timestamp = self.conn.execute("SELECT MAX(timestamp) FROM raw_data").fetchone()[0]
-            print(f'Data loaded from {self.min_timestamp} to {self.max_timestamp}')
         except Exception as e:
-            print('*'*50)
-            print('Error when loading raw data!!!')
-            print('Make sure raw_data column names are: TimeStamp, DeviceId, EventId, Parameter')
-            print('Make sure detector_config column names are: DeviceId, Phase, Parameter, Function')
-            print('*'*50)
+            v_print('*'*50, self.verbose)
+            v_print('WARNING: problem loading data!', self.verbose)
+            v_print('Make sure raw_data column names are: TimeStamp, DeviceId, EventId, Parameter', self.verbose)
+            v_print('Make sure detector_config column names are: DeviceId, Phase, Parameter, Function', self.verbose)
+            v_print('*'*50, self.verbose)
             raise e
         
     def aggregate(self):
         """Runs all aggregations."""
         # Instantiate a dictionary to store runtimes
         self.runtimes = {}
+        self.sql_queries = {} # for storing sql string when to_sql is True
         for aggregation in self.aggregations:
             start_time = time.time()
 
@@ -110,6 +124,8 @@ class SignalDataProcessor:
             ### Relies on traffic-anomaly package instead
             # Decompose data
             if aggregation['name'] == 'detector_health':
+                if self.to_sql:
+                    raise ValueError("to_sql option is  supported for detector_health")
                 decomp = traffic_anomaly.median_decompose(
                     self.binned_actuations,
                     **aggregation['params']['decompose_params']
@@ -164,25 +180,32 @@ class SignalDataProcessor:
 
             #######################
             ### Timeline ##########
-            # If timeline and self.unmatched_events is not None, update from_table to 'all_events' view
-            if aggregation['name'] == 'timeline' and self.unmatched_events is not None:
+            # If timeline use 'all_events' view (to include unmatched_events, if any)
+            if aggregation['name'] == 'timeline':
                 aggregation['params']['from_table'] = 'all_events'
+                aggregation['params']['min_timestamp'] = round_down_15(self.min_timestamp)
 
             #######################
             ### Run Aggregation ###
-            aggregate_data(self.conn,
-                    aggregation['name'],
-                    **aggregation['params'])
+            self.sql_queries[aggregation['name']] = aggregate_data(
+                self.conn,
+                aggregation['name'],
+                self.to_sql,
+                **aggregation['params'])
+
             end_time = time.time()
             self.runtimes[aggregation['name']] = end_time - start_time
 
-        print(f"\n\nTotal aggregation runtime: {sum(self.runtimes.values()):.2f} seconds.")
-        print("\nIndividual Query Runtimes:")
+        v_print(f"\n\nTotal aggregation runtime: {sum(self.runtimes.values()):.2f} seconds.", self.verbose)
+        v_print("\nIndividual Query Runtimes:", self.verbose)
         for name, runtime in self.runtimes.items():
-            print(f"{name}: {runtime:.2f} seconds")
+            v_print(f"{name}: {runtime:.2f} seconds", self.verbose)
     
     def save(self):
         """Saves the processed data."""
+        if self.to_sql:
+            v_print("to_sql option is True, data will not be saved.", self.verbose)
+            return
         save_data(**self.__dict__)
         
     def close(self):
@@ -193,5 +216,7 @@ class SignalDataProcessor:
         """Runs the complete data processing pipeline."""
         self.load()
         self.aggregate()
+        if self.to_sql:
+            return self.sql_queries
         self.save()
         self.close()

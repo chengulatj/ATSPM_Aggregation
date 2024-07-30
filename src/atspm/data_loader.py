@@ -1,3 +1,5 @@
+import os
+
 def load_data(conn,
               raw_data=None,
               detector_config=None,
@@ -56,16 +58,23 @@ def load_data(conn,
             CREATE OR REPLACE TABLE unmatched_events AS
             SELECT TimeStamp::DATETIME AS TimeStamp, DeviceId as DeviceId, EventId::INT16 as EventId, Parameter::INT16 as Parameter
             """
+        # A view that unions the raw_data and unmatched_events tables
+        create_view_sql = "CREATE OR REPLACE VIEW all_events AS SELECT * FROM raw_data UNION ALL SELECT * FROM unmatched_events"
+        # check if unmatched_events is provided and that the file exists
         if unmatched_events is not None:
             if isinstance(unmatched_events, str):
-                conn.execute(f"{load_sql} FROM '{unmatched_events}'")
+                if os.path.exists(unmatched_events):
+                    conn.execute(f"{load_sql} FROM '{unmatched_events}'")
+                    conn.execute(create_view_sql)
+                else:
+                    print("Warning! unmatched_events file does not exist yet. This is expected if no unmatched events have been recorded (first run)")
+                    conn.execute("CREATE OR REPLACE VIEW all_events AS SELECT * FROM raw_data")
             else:
                 conn.execute(f"{load_sql} FROM unmatched_events")
-            # Create a view that unions the raw_data and unmatched_events tables
-            conn.execute("CREATE OR REPLACE VIEW all_events AS SELECT * FROM raw_data UNION ALL SELECT * FROM unmatched_events")
+                conn.execute(create_view_sql)         
     except Exception as e:
         print("*"*50)
-        print("Error when loading unmatched events!")
+        print("Error when loading unmatched_events!")
         print("Loading from a CSV file may cause errors if the timestamp is not in the correct format. Try saving data in Parquet instead.")
         print("*"*50)
         raise e
