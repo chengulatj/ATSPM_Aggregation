@@ -5,6 +5,7 @@ on:
     branches: [ atspm-aggregation ]  # Runs on pushes to atspm-aggregation branch
   pull_request:
     branches: [ atspm-aggregation ]  # Runs on pull requests targeting atspm-aggregation branch
+  workflow_dispatch:  # Allows you to run this workflow manually
 
 jobs:
   test:
