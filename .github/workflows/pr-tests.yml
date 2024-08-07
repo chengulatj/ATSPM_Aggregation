@@ -1,0 +1,33 @@
+name: Python Tests
+
+on:
+  push:
+    branches: [ atspm-aggregation ]  # Runs on pushes to atspm-aggregation branch
+  pull_request:
+    branches: [ atspm-aggregation ]  # Runs on pull requests targeting atspm-aggregation branch
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']  # Testing across multiple Python versions
+
+    steps:
+    - uses: actions/checkout@v2
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v2
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install .
+        pip install pytest  # Installing pytest explicitly
+
+    - name: Run tests
+      run: |
+        pytest tests/
