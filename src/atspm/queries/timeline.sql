@@ -9,7 +9,7 @@ Transition AS
 	(
 	SELECT *
 	FROM Transition1
-	WHERE Parameter IN (2, 3, 4) AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 3600
+	WHERE Parameter IN (2, 3, 4) --AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 3600
 	),
 Preempt1 AS
 	(
@@ -22,7 +22,7 @@ Preempt AS
 	(
 	SELECT *
 	FROM Preempt1
-	WHERE EventID = 102 AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < (3600 * 4)
+	WHERE EventID = 102 --AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < (3600 * 4)
 	),
 TSP1 AS
 	(
@@ -35,7 +35,7 @@ TSP AS
 	(
 	SELECT *
 	FROM TSP1
-	WHERE EventID = 112 AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 180 
+	WHERE EventID = 112 --AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 180 
 	),
 TSP_adjust_1 AS
 	(
@@ -48,7 +48,7 @@ TSP_adjust AS
 	(
 	SELECT *
 	FROM TSP_adjust_1
-	WHERE EventID = 113 AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 120
+	WHERE EventID = 113 --AND EndTime IS NOT NULL AND DATE_DIFF('second', TimeStamp, EndTime) < 120
 	),
 Fault1 AS
 	(
@@ -61,9 +61,9 @@ Fault AS
 	(
 	SELECT *
 	FROM Fault1
-	WHERE EventID IN (87, 88) AND EndTime IS NOT NULL 
-	  AND DATE_DIFF('second', TimeStamp, EndTime) > 0 
-	  AND DATE_DIFF('second', TimeStamp, EndTime) < (3600 * 12)
+	WHERE EventID IN (87, 88) --AND EndTime IS NOT NULL 
+	  --AND DATE_DIFF('second', TimeStamp, EndTime) > 0 --??
+	  --AND DATE_DIFF('second', TimeStamp, EndTime) < (3600 * 12)
 	),
 Ped2 AS
 	(
@@ -76,7 +76,7 @@ Ped3 AS
 	(
 	SELECT *
 	FROM Ped2
-	WHERE EventId = 21 AND DATE_DIFF('second', TimeStamp, EndTime) < 120
+	WHERE EventId = 21 --AND DATE_DIFF('second', TimeStamp, EndTime) < 120
 	),
 oPed2 AS
 	(
@@ -89,7 +89,7 @@ oPed3 AS
 	(
 	SELECT * 
 	FROM oPed2
-	WHERE EventId = 67 AND DATE_DIFF('second', TimeStamp, EndTime) < 120
+	WHERE EventId = 67 --AND DATE_DIFF('second', TimeStamp, EndTime) < 120
 	),
 Coord AS
 	( 
@@ -136,6 +136,48 @@ FYA AS
 	FROM FYA1
 	WHERE FYA1.EventId = 32
 	),
+Green1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (1, 7)
+	),
+Green AS
+	(
+	SELECT Green1.TimeStamp, Green1.DeviceID, Green1.EventID, 
+	       Green1.Parameter, Green1.EndTime
+	FROM Green1
+	WHERE Green1.EventId = 1
+	),
+Yellow1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (8, 9)
+	),
+Yellow AS
+	(
+	SELECT Yellow1.TimeStamp, Yellow1.DeviceID, Yellow1.EventID, 
+	       Yellow1.Parameter, Yellow1.EndTime
+	FROM Yellow1
+	WHERE Yellow1.EventId = 8
+	),
+Red1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (10, 11)
+	),
+Red AS
+	(
+	SELECT Red1.TimeStamp, Red1.DeviceID, Red1.EventID, 
+	       Red1.Parameter, Red1.EndTime
+	FROM Red1
+	WHERE Red1.EventId = 10
+	),
 categories AS (
   SELECT * FROM (VALUES
     (150, 'Transition'),
@@ -157,7 +199,10 @@ categories AS (
     (32, 'FYA'),
     (67, 'Overlap Ped'),
     (112, 'TSP Call'),
-    (113, 'TSP Adjustment')
+    (113, 'TSP Adjustment'),
+	(1, 'Green'),
+	(8, 'Yellow'),
+	(10, 'Red')
   ) AS t(EventId, Category)
 )
 
@@ -171,7 +216,7 @@ SELECT
   DATE_DIFF('millisecond', t.TimeStamp, t.EndTime)::FLOAT / 1000 AS Duration,
   --c.Category AS Category_Basic,
   CASE
-    WHEN c.Category IN ('Ped Service', 'FYA', 'Phase Call', 'Preempt', 'TSP Call', 'TSP Adjustment', 'Overlap Ped', 'Pattern Change', 'Erratic', 'Stuck On') 
+    WHEN c.Category IN ('Ped Service', 'FYA', 'Phase Call', 'Preempt', 'TSP Call', 'TSP Adjustment', 'Overlap Ped', 'Pattern Change', 'Erratic', 'Stuck On', 'Green', 'Yellow', 'Red')
       THEN c.Category || ' ' || t.Parameter
     WHEN c.Category = 'Splits'
       THEN c.Category || ' ' || (t.EventId - 299)  
@@ -187,7 +232,6 @@ SELECT
 FROM 
 (
   SELECT * FROM Transition
-  --WHERE EndTime > TimeStamp
   UNION ALL
   SELECT * FROM Preempt
   UNION ALL 
@@ -206,8 +250,13 @@ FROM
   SELECT * FROM Splits
   UNION ALL
   SELECT * FROM PhaseCall
-  --WHERE EndTime > TimeStamp 
   UNION ALL
-  SELECT * FROM FYA 
+  SELECT * FROM FYA
+  UNION ALL
+  SELECT * FROM Green
+  UNION ALL
+  SELECT * FROM Yellow
+  UNION ALL
+  SELECT * FROM Red
 ) t
 LEFT JOIN categories c ON t.EventId = c.EventId

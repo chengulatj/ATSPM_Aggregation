@@ -1,13 +1,12 @@
 # ATSPM Aggregation
 
-`atspm` is a production-ready Python package to transform hi-res ATC signal controller data into aggregate ATSPMs (Automated Traffic Signal Performance Measures). It runs locally using the lightweight yet powerful [DuckDB](https://duckdb.org/) SQL engine.
+`atspm` is a production-ready Python package to transform hi-res ATC signal controller data into aggregate ATSPMs (Automated Traffic Signal Performance Measures). It runs locally using the powerful & lightweight [DuckDB](https://duckdb.org/) SQL engine.
 
 ## Features
 
-- Transforms high-resolution ATC signal controller data into aggregate ATSPMs
-- Uses DuckDB for efficient local processing
-- Supports various output formats (CSV, Parquet, JSON)
-- Includes multiple performance measures (Actuations, Arrival on Green, Split Failures, etc.)
+- Transforms hi-res ATC signal controller data into aggregate ATSPMs
+- Supports incremental processing for real-time data (ie. every 15 minutes)
+- Output to user-defined folder structure and file format (csv/parquet/json), or query DuckDB tables directly
 - Deployed in production by Oregon DOT since July 2024
 
 ## Installation
@@ -17,7 +16,7 @@ pip install atspm
 ```
 Or pinned to a specific version:
 ```bash
-pip install atspm==1.6.0
+pip install atspm==1.7.0 
 ```
 `atspm` was developed with Python 3.11 and should work with 3.7 and up.
 
@@ -34,30 +33,49 @@ Here's a simple example of how to use `atspm`:
 # Import libraries
 from atspm import SignalDataProcessor, sample_data
 
-# Set up all parameters
 params = {
     # Global Settings
-    'raw_data': sample_data.data, # dataframe or file path to csv/parquet/json
+    'raw_data': sample_data.data, # dataframe or file path
     'detector_config': sample_data.config,
     'bin_size': 15, # in minutes
     'output_dir': 'test_folder',
     'output_to_separate_folders': True,
     'output_format': 'csv', # csv/parquet/json
-    'output_file_prefix': 'test_prefix',
-    'remove_incomplete': True, # Remove periods with incomplete data by joining to the has_data table
+    'output_file_prefix': 'prefix_',
+    'remove_incomplete': True, # Remove periods with incomplete data
+    'unmatched_event_settings': { # For incremental processing
+        'df_or_path': 'test_folder/unmatched.parquet',
+        'split_fail_df_or_path': 'test_folder/sf_unmatched.parquet',
+        'max_days_old': 14},
+    'to_sql': False, # Returns SQL string
+    'verbose': 1, # 0: print off, 1: print performance, 2: print all
     # Performance Measures
     'aggregations': [
-        {'name': 'has_data', 'params': {'no_data_min': 5, 'min_data_points': 3}}, # in minutes, ie remove bins with less than 3 rows every 5 minutes
+        {'name': 'has_data', 'params': {'no_data_min': 5, 'min_data_points': 3}},
         {'name': 'actuations', 'params': {}},
         {'name': 'arrival_on_green', 'params': {'latency_offset_seconds': 0}},
-        {'name': 'communications', 'params': {'event_codes': '400,503,502'}}, # MAXVIEW Specific
-        {'name': 'coordination', 'params': {}}, # MAXTIME Specific
-        {'name': 'full_ped', 'params': {'seconds_between_actuations': 15, 'return_volumes':True}},
-        {'name': 'split_failures', 'params': {'red_time': 5, 'red_occupancy_threshold': 0.80, 'green_occupancy_threshold': 0.70, 'by_approach': True}},
+        {'name': 'communications', 'params': {'event_codes': '400,503,502'}},# MAXVIEW Specific
+        {'name': 'coordination', 'params': {}},  # MAXTIME Specific
+        {'name': 'ped', 'params': {}},
+        {'name': 'unique_ped', 'params': {'seconds_between_actuations': 15}},
+        {'name': 'full_ped', 'params': {
+            'seconds_between_actuations': 15,
+            'return_volumes': True
+        }},
+        {'name': 'split_failures', 'params': {
+            'red_time': 5,
+            'red_occupancy_threshold': 0.80,
+            'green_occupancy_threshold': 0.80,
+            'by_approach': True,
+            'by_cycle': False
+        }},
         {'name': 'splits', 'params': {}}, # MAXTIME Specific
         {'name': 'terminations', 'params': {}},
-        {'name': 'yellow_red', 'params': {'latency_offset_seconds': 1.5, 'min_red_offset': -8}}, # min_red_offset is optional, it filters out actuations occuring -n seconds before start of red
-        {'name': 'timeline', 'params': {'cushion_time':60, 'max_event_days': 14}},   
+        {'name': 'yellow_red', 'params': {
+            'latency_offset_seconds': 1.5,
+            'min_red_offset': -8
+        }},
+        {'name': 'timeline', 'params': {'min_duration': 0.2, 'cushion_time': 60}},
     ]
 }
 
@@ -71,6 +89,8 @@ After running the `SignalDataProcessor`, the output directory will have the foll
 
 ```
 test_folder/
+unmatched.parquet
+sf_unmatched.parquet
 ├── actuations/
 ├── yellow_red/
 ├── arrival_on_green/
@@ -80,9 +100,11 @@ test_folder/
 ...etc...
 ```
 
-Inside each folder, there will be a CSV file named `test_prefix.csv` with the aggregated performance data. The prefix can be used, for example, by setting it to the run date. Or you can output everything to a single folder.
+Inside each folder, there will be a CSV file named `prefix_.csv` with the aggregated performance data. In production, the prefix could be named using the date/time of the run. Or you can output everything to a single folder.
 
 A good way to use the data is to output as parquet to separate folders, and then a data visualization tool like Power BI can read in all the files in each folder and create a dashboard. For example, see: [Oregon DOT ATSPM Dashboard](https://app.powerbigov.us/view?r=eyJrIjoiNzhmNTUzNDItMzkzNi00YzZhLTkyYWQtYzM1OGExMDk3Zjk1IiwidCI6IjI4YjBkMDEzLTQ2YmMtNGE2NC04ZDg2LTFjOGEzMWNmNTkwZCJ9)
+
+Use of CSV files in production should be avoided, instead use [Parquet](https://parquet.apache.org/) file format, which is significantly faster, smaller, and enforces datatypes.
 
 ## Performance Measures
 
@@ -90,12 +112,12 @@ The following performance measures are included:
 
 - Actuations
 - Arrival on Green
-- Communications (MaxView Specific, otherwise "Has Data" tells when controller generated data)
-- Coordination (MaxTime Specific)
+- Communications (MAXVIEW Specific, otherwise "Has Data" tells when controller generated data)
+- Coordination (MAXTIME Specific)
 - Detector Health
 - Pedestrian Actuations, Services, and Estimated Volumes
 - Split Failures
-- Splits (MaxTime Specific)
+- Splits (MAXTIME Specific)
 - Terminations
 - Timeline Events
 - Yellow and Red Actuations
@@ -108,18 +130,15 @@ Detailed documentation for each measure is coming soon.
 
 ## Release Notes
 
-### Version 1.6.0 (July 29, 2024)
+### Version 1.7.0 (August 22, 2024)
 
 #### Bug Fixes / Improvements:
-- Improved performance for arrival_on_green, split_failures, and yellow_red by filtering out unused phase events.
-- Now using a stable version of DuckDB (1.0.0).
-- Now saves unmatched events from timeline events, to be loaded in next time. This assumes running on a schedule like every 15 minutes.
-- output_file_prefix is no longer required when saving.
+- Fixed issue with incremental processing where cycles at the processing boundary were getting thrown out. This was NOT fixed yet for yellow_red!
+- Significant changes to split_failures to make incremental processing more robust. For example, cycle timestamps are now tied to the end of the red period, not the start of the green period. 
 
 #### New Features:
-- Set a max number of days for unmatched events before removal to prevent accumulation over time.
-- Added verbose option to set level of print/debug statements.
-- `.to_sql()` method now returns SQL string instead of executing it, for debugging or executing on other platforms.
+- Support for incremental processing added for split_failures & arrival_on_green. (yellow_red isn't passing tests yet)
+- Added phase green, yellow & all red to timeline. 
 
 ## Future Plans
 

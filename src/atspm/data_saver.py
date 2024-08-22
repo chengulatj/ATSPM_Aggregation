@@ -1,8 +1,9 @@
 import os
-
-# NEED TO ADD IN OPTION TO APPEND TO EXISTING FILE!!!!!!!!
+from .utils import v_print
 
 def save_data(**kwargs):
+    unmatched_events_path = None
+    sf_unmatched_events_path = None
     # Extract parameters from kwargs
     output_dir = kwargs['output_dir']
     output_to_separate_folders = kwargs['output_to_separate_folders']
@@ -13,27 +14,45 @@ def save_data(**kwargs):
     else:
         prefix = kwargs['output_file_prefix']
     conn = kwargs['conn']
-    if 'unmatched_events' in kwargs:
-        unmatched_events_path = kwargs['unmatched_events']
-    else:
-        unmatched_events_path = None
+    if kwargs['unmatched_event_settings'] is not None:
+        if 'df_or_path' in kwargs['unmatched_event_settings']:
+            unmatched_events_path = kwargs['unmatched_event_settings']['df_or_path']
+            unmatched_events_path = unmatched_events_path.strip("'")
+        else:
+            unmatched_events_path = None
+        if 'split_fail_df_or_path' in kwargs['unmatched_event_settings']:
+            sf_unmatched_events_path = kwargs['unmatched_event_settings']['split_fail_df_or_path']
+            sf_unmatched_events_path = sf_unmatched_events_path.strip("'")
+        else:
+            sf_unmatched_events_path = None
 
     # Make output directory if it does not exist
     os.makedirs(output_dir, exist_ok=True)
 
     # Get all table names in the database
-    table_names = conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    table_names = conn.sql("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
+    v_print(f"Saving the following tables: {table_names}", kwargs['verbose'], 2)
 
     # Iterate over all tables
     for table_name in table_names:
         table_name = table_name[0]
         # skip if table name is raw_data or detector_config
-        if table_name in ['raw_data', 'detector_config']:
+        if table_name in ['raw_data', 'detector_config', 'unmatched_previous', 'sf_unmatched_previous', 'sf_final']:
             continue
         # Save unmatched data to path given, if any
-        if table_name == 'unmatched_events' and unmatched_events_path is not None:
+        if table_name == 'unmatched_events' and isinstance(unmatched_events_path, str):
+            v_print(f"Saving unmatched events to {unmatched_events_path}", kwargs['verbose'], 2)
             query = f"COPY (SELECT * FROM unmatched_events) TO '{unmatched_events_path}'"
-            conn.execute(query)
+            v_print(query, kwargs['verbose'], 2)
+            conn.query(query)
+            continue
+
+        # Save split failures unmatched data to path given, if any
+        if table_name == 'sf_unmatched' and isinstance(sf_unmatched_events_path, str):
+            v_print(f"Saving split failures unmatched events to {sf_unmatched_events_path}", kwargs['verbose'], 2)
+            query = f"COPY (SELECT * FROM sf_unmatched) TO '{sf_unmatched_events_path}'"
+            v_print(query, kwargs['verbose'], 2)
+            conn.query(query)
             continue
 
         if output_to_separate_folders:
@@ -45,4 +64,4 @@ def save_data(**kwargs):
 
         # Query to select all data from the table
         query = f"COPY (SELECT * FROM {table_name} ORDER BY TimeStamp) TO '{output_dir}/{final_path}.{output_format}'"
-        conn.execute(query)
+        conn.query(query)

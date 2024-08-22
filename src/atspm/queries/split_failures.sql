@@ -1,6 +1,6 @@
 --Aggregate split failures
 --Written in SQL for DuckDB. This is a jinja2 template, with variables inside curly braces.
-
+CREATE TABLE sf_intermediate AS
 WITH step1 as (
 -- detector_with_phase
 -- Join Phase Number to each Detector Event
@@ -78,14 +78,26 @@ WITH lagged as (
         SELECT *,
             ROW_NUMBER() OVER(PARTITION BY DeviceId, Detector ORDER BY TimeStamp) as row_num
         FROM combined
+    ),
+    --The first detector event needs to be an ON event for later logic to work
+    --Therefore this step adds an ON event if the first event is an OFF event
+    on_before_off AS (
+        SELECT TimeStamp - INTERVAL 1 MILLISECOND as TimeStamp,--just right before the off event to make ordering work but not mess up occuapncy
+            DeviceId,
+            82 as EventId,
+            Detector,
+            Phase
+        FROM ordered_rows
+        WHERE row_num = 1 AND EventId = 81
     )
     SELECT TimeStamp,
         DeviceId,
         EventId,
         Detector,
         Phase
-    FROM ordered_rows
-    WHERE NOT (row_num = 1 AND EventId = 81)
+    FROM combined
+    UNION ALL
+    SELECT * FROM on_before_off
 ),
 
 --Step 3 depends on the value of by_approach (handled by the Jinja2 template)
@@ -201,9 +213,19 @@ step3 AS (
 ),
 {% endif %}
 
+
+--Union previous unmatched data with current data
+{% if unmatched %}
+step3b AS (
+    SELECT * FROM step3
+    UNION ALL
+    SELECT * FROM sf_unmatched_previous
+),
+{% endif %}
+
 step4 AS (
     -- with_barrier
-    --Add 5 second after red time barrior for Split Failures
+    --Add 5 second after red time barrier for Split Failures
     WITH red_time_barrier AS (
         SELECT 
             "TimeStamp" + INTERVAL '{{red_time}}' SECOND as TimeStamp,
@@ -212,11 +234,19 @@ step4 AS (
             Detector,
             Phase
         FROM 
-            step3
+            {% if unmatched %} step3b {% else %} step3 {% endif %}
         WHERE 
             EventId = 10
+            --and ensure that the timestamp plus red_time is less than the max timestamp
+            and "TimeStamp" + INTERVAL '{{red_time}}' SECOND < (
+                --This is to ensure the red barrier will not be added past the cutoff time for data being processed
+                --The max timestamp gets rounded down to the nearest bin_size interval and then that interval is added to it to get the max time to get the cutoff time
+                SELECT TIME_BUCKET(interval '{{bin_size}} minutes', MaxTime) + INTERVAL '{{bin_size}} minutes' as MaxTime
+                FROM
+                    (SELECT MAX(TimeStamp) MaxTime FROM {{from_table}}) q
+                )
     )
-    SELECT * FROM step3
+    SELECT * FROM {% if unmatched %} step3b {% else %} step3 {% endif %}
     UNION ALL
     SELECT * FROM red_time_barrier  
 ),
@@ -246,15 +276,64 @@ step5 AS (
         CAST(MAX(Signal_State_Mask) OVER (PARTITION BY DeviceId, Detector, Phase, Cycle_Number ORDER BY TimeStamp, EventId) AS UTINYINT) AS Signal_State,
         CAST(MAX(Detector_State_Change) OVER (PARTITION BY DeviceId, Detector, Phase, Detector_Group ORDER BY TimeStamp, EventId) AS BOOL) AS Detector_State--, Detector_Group, Detector_State_Mask
     FROM step2a  
-),
+)
+SELECT * FROM step5 --step5
+;
 
-step6 AS (
+
+--Now to save data from incomplete cycles for the next run
+{% if incremental_run %}
+CREATE TABLE sf_unmatched AS
+WITH max_cycle AS (
+    SELECT DeviceId, Detector, Phase, MAX(Cycle_Number) Cycle_Number
+    FROM sf_intermediate
+    GROUP BY ALL
+),
+incomplete_cycles as (
+    SELECT DeviceId, Detector, Phase, Cycle_Number
+    FROM sf_intermediate
+    NATURAL JOIN max_cycle
+    WHERE Cycle_Number > 0 --0 cycle means it didn't start with a green event
+    GROUP BY ALL
+    HAVING 
+        COUNT(CASE WHEN EventId = 1 THEN EventId END) = 1 --ensure cycle started on green
+        and COUNT(CASE WHEN EventId = 11 THEN EventId END) = 0 --ensure cycle is not complete (no red barrier yet)
+),
+detector_states as (
+    SELECT TimeStamp, DeviceId, Detector, Phase, Cycle_Number, Detector_State,
+        ROW_NUMBER() OVER (PARTITION BY DeviceId, Detector, Phase, Cycle_Number ORDER BY TimeStamp) as row_num,
+        ROW_NUMBER() OVER (PARTITION BY DeviceId, Detector, Phase, Cycle_Number ORDER BY TimeStamp DESC) as row_num_desc
+    FROM sf_intermediate
+    NATURAL JOIN max_cycle
+),
+final_detector_states as (
+    SELECT 
+        TimeStamp - INTERVAL 1 MILLISECOND as TimeStamp,--subtract a millisec to have it be before the phase event
+        DeviceId,
+        CASE WHEN Detector_State THEN 82 ELSE 81 END as EventId,
+        Detector, Phase
+    FROM detector_states
+    WHERE row_num = 1 OR row_num_desc = 1
+)
+SELECT TimeStamp, DeviceId, EventId, Detector, Phase--, Cycle_Number, Signal_State, Detector_State
+FROM sf_intermediate
+NATURAL JOIN incomplete_cycles
+UNION ALL
+SELECT * FROM final_detector_states
+;
+{% endif %}
+
+
+
+--Now to calculate the split failures from the intermediate data
+CREATE TABLE sf_final AS
+WITH step6 AS (
     -- time_diff
     -- Calc time diff between events
     WITH device_lag AS (
         SELECT *,
         LEAD(TimeStamp) OVER (PARTITION BY DeviceId, Detector, Phase ORDER BY TimeStamp, EventId) AS NextTimeStamp
-        FROM step5
+        FROM sf_intermediate
     )
     SELECT TimeStamp, 
         DeviceId, 
@@ -267,26 +346,27 @@ step6 AS (
         CAST(DATEDIFF('MILLISECOND', TimeStamp, NextTimeStamp) AS INT) AS TimeDiff
     FROM device_lag
 ),
-
-step7 AS (
-    -- aggregate
+valid_cycles AS (
+    -- Generate VALID CYCLES to remove cycles with missing data for current run, and save incomplete cycle data for next run
     -- Remove cycles with missing data, and Sum the detector on/off time over each phase state
-    WITH valid_cycles AS(
-        SELECT DeviceId,
-            Detector,
-            Phase, 
-            Cycle_Number
-        FROM step6
-        WHERE Cycle_Number > 0
-        GROUP BY DeviceId, Detector, Phase, Cycle_Number
-        HAVING 
-            COUNT(CASE WHEN EventId = 8 THEN EventId END) = 1 --ensure only 1 yellow change event in cycle
-            and COUNT(CASE WHEN EventId = 10 THEN EventId END) = 1 --ensure only 1 red change event in cycle
-            --(cycles are deliniated by begin green, so they already are guaranteed to only have 1 green event)
-            and COUNT(CASE WHEN Detector_State IS NULL THEN 1 END) = 0
-            and COUNT(CASE WHEN TimeDIff IS NULL THEN 1 END) = 0
-    )
-    SELECT MIN(TimeStamp) as TimeStamp, 
+    SELECT DeviceId,
+        Detector,
+        Phase, 
+        Cycle_Number
+    FROM step6
+    WHERE Cycle_Number > 0 --0 cycle means it didn't start with a green event
+    GROUP BY DeviceId, Detector, Phase, Cycle_Number
+    HAVING 
+        COUNT(CASE WHEN EventId = 8 THEN EventId END) = 1 --ensure 1 yellow change event in cycle
+        and COUNT(CASE WHEN EventId = 11 THEN EventId END) = 1 --ensure 1 red barrier
+        --(cycles are deliniated by begin green, so they already are guaranteed to only have 1 green event)
+        and COUNT(CASE WHEN Detector_State IS NULL THEN 1 END) = 0 --ensure no missing detector states
+        --and COUNT(CASE WHEN TimeDIff IS NULL THEN 1 END) = 0 --ensure no missing time diffs
+),
+
+--Remove invalid cycles, set timestamps the same for each cycle, and sum the time for each state
+step7 AS (
+    SELECT MAX(TimeStamp) as TimeStamp, 
         DeviceId, 
         Detector,
         Phase,
@@ -296,19 +376,20 @@ step7 AS (
         CAST(SUM(TimeDiff) AS INT) AS TotalTimeDiff
     FROM step6
     NATURAL JOIN valid_cycles
-    GROUP BY DeviceId, Detector, Phase, Cycle_Number, Signal_State, Detector_State  
+    WHERE Signal_State IN (1,10) OR EventId=11 --only green and red states are used for split failures, but also keep the red barrier to set max timestamp consistently
+    GROUP BY ALL --DeviceId, Detector, Phase, Cycle_Number, Signal_State, Detector_State  
 ),
 
+--Add up time for states in the cycle
 step8 AS (
-    -- final_SF
-    -- Final Steps
     WITH step1b AS (
-        SELECT MIN(TimeStamp) as TimeStamp, DeviceId, Detector, Phase, Cycle_Number,
+        --timestamps are already the same at this point but need to be in an aggregate function for the group by
+        SELECT MAX(TimeStamp) as TimeStamp, DeviceId, Detector, Phase, Cycle_Number,
             CAST(SUM(CASE WHEN Detector_State = TRUE AND Signal_State = 1 THEN TotalTimeDiff ELSE 0 END) AS INT) AS Green_ON,
             CAST(SUM(CASE WHEN Detector_State = FALSE AND Signal_State = 1 THEN TotalTimeDiff ELSE 0 END) AS INT) AS Green_OFF,
             CAST(SUM(CASE WHEN Detector_State = TRUE AND Signal_State = 10 THEN TotalTimeDiff ELSE 0 END) AS INT) AS Red_5_ON --red_5_OFF is just the inverse
         FROM step7
-        GROUP BY DeviceId, Detector, Phase, Cycle_Number
+        GROUP BY ALL --DeviceId, Detector, Phase, Cycle_Number
     )
     SELECT TimeStamp, DeviceId, Detector, Phase,
         CAST(Green_ON + Green_OFF AS FLOAT) / 1000 AS Green_Time,
@@ -317,7 +398,7 @@ step8 AS (
     FROM step1b
 )
 
-
+{% if not by_cycle %}
 SELECT 
     time_bucket(interval '{{bin_size}} minutes', TimeStamp) as TimeStamp,
     DeviceId,
@@ -334,3 +415,26 @@ SELECT
         THEN 1 ELSE 0 END)::int16 AS Split_Failure
 FROM step8
 GROUP BY ALL
+;
+{% else %}
+SELECT
+    TimeStamp,
+    DeviceId,
+    {% if not by_approach %}
+    Detector::int16 as Detector,
+    {% endif %}
+    Phase::int16 as Phase,
+    Green_Time,
+    Green_Occupancy,
+    Red_Occupancy,
+    (CASE WHEN 
+        Red_Occupancy>={{red_occupancy_threshold}}
+        AND Green_Occupancy>={{green_occupancy_threshold}}
+        THEN 1 ELSE 0 END)::int16 AS Split_Failure
+FROM step8
+;
+{% endif %}
+
+--Clean up
+DROP TABLE sf_intermediate
+;

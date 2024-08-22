@@ -1,11 +1,13 @@
-name: Python Tests
+name: Python Tests and Publish
 
 on:
   push:
-    branches: [ atspm-aggregation ]  # Runs on pushes to atspm-aggregation branch
+    branches: [ atspm-aggregation ]
   pull_request:
-    branches: [ atspm-aggregation ]  # Runs on pull requests targeting atspm-aggregation branch
-  workflow_dispatch:  # Allows you to run this workflow manually
+    branches: [ atspm-aggregation ]
+  release:
+    types: [created]
+  workflow_dispatch:
 
 jobs:
   test:
@@ -13,22 +15,56 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
-        python-version: ['3.7', '3.8', '3.9', '3.10', '3.11']  # Testing across multiple Python versions
+        python-version: ['3.8', '3.11']
 
     steps:
-    - uses: actions/checkout@v2
+    - uses: actions/checkout@v3
 
     - name: Set up Python ${{ matrix.python-version }}
-      uses: actions/setup-python@v2
+      uses: actions/setup-python@v4
       with:
         python-version: ${{ matrix.python-version }}
 
     - name: Install dependencies
       run: |
-        python -m pip install --upgrade pip
-        pip install .
-        pip install pytest  # Installing pytest explicitly
+        pip install pytest build
+
+    - name: Build package
+      run: python -m build
 
     - name: Run tests
+      run: pytest --junitxml=pytest-results.xml
+
+    - name: Upload pytest results
+      uses: actions/upload-artifact@v3
+      with:
+        name: pytest-results-${{ matrix.os }}-${{ matrix.python-version }}
+        path: pytest-results.xml
+      if: ${{ always() }}
+
+  publish:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'release' && github.event.action == 'created'
+
+    steps:
+    - uses: actions/checkout@v3
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.x'
+
+    - name: Install dependencies
       run: |
-        pytest tests/
+        python -m pip install --upgrade pip
+        pip install build twine
+
+    - name: Build package
+      run: python -m build
+
+    - name: Publish to PyPI
+      env:
+        TWINE_USERNAME: ${{ secrets.PYPI_USERNAME }}
+        TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+      run: twine upload dist/*

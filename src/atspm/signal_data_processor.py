@@ -6,31 +6,87 @@ from .data_aggregator import aggregate_data
 from .data_saver import save_data
 from .utils import round_down_15
 from .utils import v_print
+import os
 
 
 class SignalDataProcessor:
     '''
-    Main class in atspm package, used to call other class functions to process signal data, turning raw hi-res data into aggregated data.
+    Main class in the atspm package, used to process signal data by turning raw hi-res data into aggregated data.
+
+    This class handles the entire pipeline of loading raw data, performing various aggregations,
+    and saving the results. It supports both one-time processing and incremental processing with
+    unmatched event handling. Most the inputs here are optional, depending on the desired processing.
 
     Attributes
     ----------
-    raw_data_path : str
-        The path to the raw data file.
-    detector_config_path : str
-        The path to the detector configuration file.
+    raw_data : str or DataFrame
+        The raw data to be processed, either as a file path or a DataFrame.
+    detector_config : str or DataFrame
+        The detector configuration, either as a file path or a DataFrame.
+    bin_size : int
+        The size of the time bins for aggregation, in minutes.
     output_dir : str
         The directory where the output files will be saved.
     output_to_separate_folders : bool
         If True, output files will be saved in separate folders.
     output_format : str
-        The format of the output files. Options are "parquet", "csv", etc.
-    aggregations : list
+        The format of the output files. Options are "csv", "parquet", "json".
+    output_file_prefix : str
+        Prefix to be added to all output file names.
+    remove_incomplete : bool
+        If True, removes periods with incomplete data based on the 'has_data' aggregation.
+    unmatched_event_settings : dict, optional
+        Settings for handling unmatched events in incremental processing. Includes:
+        - df_or_path: str, path to save/load unmatched events
+        - split_fail_df_or_path: str, path to save/load unmatched split failure events
+        - max_days_old: int, maximum age of unmatched events to consider
+    to_sql : bool
+        If True, returns SQL strings instead of executing queries.
+    verbose : int
+        Controls the verbosity of output. 0: only errors, 1: performance, 2: debug statements.
+    aggregations : list of dict
         A list of dictionaries, each containing the name of an aggregation function and its parameters.
+        Supported aggregations include: 'has_data', 'actuations', 'arrival_on_green', 'communications',
+        'coordination', 'ped', 'unique_ped', 'full_ped', 'split_failures', 'splits', 'terminations',
+        'yellow_red', 'timeline', and potentially others.
 
     Methods
     -------
-    run():
-        Loads the data, runs the aggregations, saves the output, and closes the database connection.
+    load()
+        Loads the raw data and detector configuration into DuckDB tables.
+    aggregate()
+        Runs all specified aggregations on the loaded data.
+    save()
+        Saves the processed data to the specified output directory and format.
+    close()
+        Closes the database connection.
+    run()
+        Executes the complete data processing pipeline: load, aggregate, save, and close.
+        If to_sql is True, returns the SQL queries instead of executing them.
+
+    Example
+    -------
+    processor = SignalDataProcessor(
+        raw_data=sample_data.data,
+        detector_config=sample_data.config,
+        bin_size=15,
+        output_dir='test_folder',
+        output_to_separate_folders=True,
+        output_format='csv',
+        remove_incomplete=True,
+        unmatched_event_settings={
+            'df_or_path': 'test_folder/unmatched.parquet',
+            'split_fail_df_or_path': 'test_folder/sf_unmatched.parquet',
+            'max_days_old': 14
+        },
+        verbose=1,
+        aggregations=[
+            {'name': 'has_data', 'params': {'no_data_min': 5, 'min_data_points': 3}},
+            {'name': 'actuations', 'params': {}},
+            # ... other aggregations ...
+        ]
+    )
+    processor.run()
     '''
 
     def __init__(self, **kwargs):
@@ -38,7 +94,9 @@ class SignalDataProcessor:
         # Optional parameters
         self.raw_data = None
         self.detector_config = None
-        self.unmatched_events = None # For timeline aggregation, future use for other aggregations that track phase state (split failure, arrival on green, etc.)
+        self.unmatched_event_settings = None # For incremental processing of timeline, split failure, arrival on green, and yellow red)
+        self.unmatched_found = False
+        self.incremental_run = False
         self.binned_actuations = None # For detector_health aggregation
         self.device_groups = None # For detector_health aggregation if groups are provided
         self.remove_incomplete = False
@@ -59,6 +117,21 @@ class SignalDataProcessor:
             # Make sure that has_data is the first aggregation
             idx = [d['name'] for d in self.aggregations].index('has_data')
             self.aggregations.insert(0, self.aggregations.pop(idx))
+
+        # Check format of unmatched_event_settings
+        # Duckdb needs quotes if it is a file path, but not if it is a dataframe
+        if self.unmatched_event_settings is not None:
+            self.incremental_run = True
+            self.unmatched_found = True
+            for key, value in self.unmatched_event_settings.items():
+                if key == 'max_days_old':
+                    continue
+                if isinstance(value, str):
+                    if os.path.exists(value):
+                        self.unmatched_event_settings[key] = f"'{value}'"
+                    else:
+                        v_print(f"Warning! unmatched_events file {value} does not exist at given path yet. This is expected if no unmatched events have been recorded (first run), and a file will be output to that path at end of this run.", self.verbose)
+                        self.unmatched_found = False
 
         # Check if detector_health is in aggregations
         if any(d['name'] == 'detector_health' for d in self.aggregations):
@@ -90,9 +163,11 @@ class SignalDataProcessor:
             return
         try:
             load_data(self.conn,
+                    self.verbose,
                     self.raw_data,
                     self.detector_config,
-                    self.unmatched_events)
+                    self.unmatched_event_settings,
+                    self.unmatched_found)
             # delete self.raw_data and self.detector_config to free up memory
             self.data_loaded = True
             if self.raw_data is not None:
@@ -115,6 +190,13 @@ class SignalDataProcessor:
         # Instantiate a dictionary to store runtimes
         self.runtimes = {}
         self.sql_queries = {} # for storing sql string when to_sql is True
+
+        # Create unmatched_events table if unmatched_events is not None
+        # This table will be used to insert unmatched events, to be saved and reloaded in the next run
+        #if self.unmatched_event_settings is not None:
+        #    v_print("Creating unmatched_events table", self.verbose, level=2)
+        #    self.conn.query(f"CREATE TABLE unmatched_events AS SELECT * AS aggregation FROM raw_data WHERE 1=0")
+
         for aggregation in self.aggregations:
             start_time = time.time()
 
@@ -179,12 +261,17 @@ class SignalDataProcessor:
                 aggregation['params']['max_timestamp'] = round_down_15(self.max_timestamp)
 
             #######################
-            ### Timeline ##########
-            # If timeline use 'all_events' view (to include unmatched_events, if any)
-            if aggregation['name'] == 'timeline':
-                aggregation['params']['from_table'] = 'all_events'
-                aggregation['params']['min_timestamp'] = round_down_15(self.min_timestamp)
-
+            ### Unmatched Events ##
+            # If unmatched_event_settings is supplied, then change the from_table for timeline, split_failures, arrival_on_green, and yellow_red
+            # These are views that have the relateded unmatched events unioned to them
+            if self.incremental_run and aggregation['name'] in ['timeline', 'arrival_on_green', 'yellow_red', 'split_failures']:
+                aggregation['params']['incremental_run'] = True #lets the aggregation know to save unmatched events for next run
+                if self.unmatched_found:
+                    aggregation['params']['unmatched'] = True #lets the aggregation know to use the unmatched events from previous run
+                    # split_failures uses its own view
+                    if aggregation['name'] != 'split_failures':
+                        aggregation['params']['from_table'] = 'raw_data_all'
+              
             #######################
             ### Run Aggregation ###
             self.sql_queries[aggregation['name']] = aggregate_data(
