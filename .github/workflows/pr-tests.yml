@@ -28,6 +28,7 @@ jobs:
     - name: Install dependencies
       run: |
         pip install pytest build pandas pyarrow
+        pip install .
 
     - name: Build package
       run: python -m build
