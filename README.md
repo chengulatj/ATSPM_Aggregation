@@ -18,7 +18,7 @@ Or pinned to a specific version:
 ```bash
 pip install atspm==1.7.0 
 ```
-`atspm` was developed with Python 3.11 and should work with 3.7 and up.
+`atspm` works on Python 3.10-3.12 and is tested on Ubuntu, Windows, and MacOS.
 
 ## Quick Start
 
