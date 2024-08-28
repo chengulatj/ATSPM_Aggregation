@@ -2,21 +2,14 @@
 --Written in SQL for DuckDB. This is a jinja2 template, with variables inside curly braces.
 
 WITH view1 AS (
-    -- detector_with_phase_ON_ONLY
-    -- This is for arrival on green, or yellow/red actuation, where we only need detector ON events
-    -- It shift timestamps back to account for latency
-    -- And joins Phase Number to each Detector Event
-    -- Rename parameter as Detector to avoid cofusion
-    SELECT d.TimeStamp - INTERVAL ({{latency_offset_seconds}} * 1000) MILLISECOND as TimeStamp,
-        d.DeviceId, 
-        d.EventId::int16 AS EventId, 
-        c.Phase::int16 AS Phase
-    FROM {{from_table}} AS d
-    JOIN detector_config AS c ON 
-        d.DeviceId = c.DeviceId 
-        AND d.Parameter = c.Parameter
-    WHERE EventId = 82 
-        AND c.Function = 'Yellow_Red'
+    -- Shift timestamps back to account for latency and join Phase Number to each Detector On Event
+    SELECT TimeStamp - INTERVAL ({{latency_offset_seconds}} * 1000) MILLISECOND as TimeStamp,
+        DeviceId, 
+        EventId::int16 AS EventId, 
+        Phase::int16 AS Phase
+    FROM {{from_table}}
+    NATURAL JOIN detector_config
+    WHERE EventId = 82 AND Function = 'Yellow_Red'
 ),
 
 view2 AS (
@@ -50,23 +43,19 @@ view3 AS (
     WITH step1 as (
         SELECT *,
             CASE WHEN EventId = 1 THEN 1 ELSE 0 END AS Cycle_Number_Mask,
-            CASE WHEN EventId < 81 THEN EventId ELSE 0 END AS Signal_State_Mask,
-            CASE WHEN EventId = 81 THEN 0 WHEN EventId =82 THEN 1 END AS Detector_State_Change
+            CASE WHEN EventId < 81 THEN EventId ELSE 0 END AS Signal_State_Mask
         FROM view2
     ),
     step2 as (
         SELECT *,
-            SUM(Cycle_Number_Mask) OVER (PARTITION BY DeviceId, Phase ORDER BY TimeStamp, EventId) AS Cycle_Number,
-            COUNT(Detector_State_Change) OVER (PARTITION BY DeviceId, Phase ORDER BY TimeStamp, EventId) AS Detector_Group
-            FROM step1
+            SUM(Cycle_Number_Mask) OVER (PARTITION BY DeviceId, Phase ORDER BY TimeStamp, EventId) AS Cycle_Number            FROM step1
     )
     SELECT TimeStamp,
         DeviceId, 
         EventId, 
         Phase,
         Cycle_Number,
-        MAX(Signal_State_Mask) OVER (PARTITION BY DeviceId, Phase, Cycle_Number ORDER BY TimeStamp, EventId)::int16 AS Signal_State,
-        CAST(MAX(Detector_State_Change) OVER (PARTITION BY DeviceId, Phase, Detector_Group ORDER BY TimeStamp, EventId) AS BOOL) AS Detector_State--, Detector_Group, Detector_State_Mask
+        MAX(Signal_State_Mask) OVER (PARTITION BY DeviceId, Phase, Cycle_Number ORDER BY TimeStamp, EventId)::int16 AS Signal_State
     FROM step2
 ),
 

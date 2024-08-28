@@ -1,3 +1,6 @@
+--Timeline Events for Troubleshooting by Visualizing What Happened
+--Written in SQL for DuckDB. This is a jinja2 template, with variables inside curly braces.
+
 WITH Transition1 AS 
 	(
 	SELECT *,
@@ -178,6 +181,48 @@ Red AS
 	FROM Red1
 	WHERE Red1.EventId = 10
 	),
+SpecialFunction1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (176,177)
+	),
+SpecialFunction AS
+	(
+	SELECT SpecialFunction1.TimeStamp, SpecialFunction1.DeviceID, SpecialFunction1.EventID, 
+	       SpecialFunction1.Parameter, SpecialFunction1.EndTime
+	FROM SpecialFunction1
+	WHERE SpecialFunction1.EventId = 176
+	),
+AdvanceWarningPhase1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (55,56)
+	),
+AdvanceWarningPhase AS
+	(
+	SELECT AdvanceWarningPhase1.TimeStamp, AdvanceWarningPhase1.DeviceID, AdvanceWarningPhase1.EventID, 
+	       AdvanceWarningPhase1.Parameter, AdvanceWarningPhase1.EndTime
+	FROM AdvanceWarningPhase1
+	WHERE AdvanceWarningPhase1.EventId = 55
+	),
+AdvanceWarningOverlap1 AS
+	(
+	SELECT *,
+	LEAD(TimeStamp) OVER (PARTITION BY DeviceID, Parameter ORDER BY TimeStamp) AS EndTime
+	FROM {{from_table}}               
+	WHERE EventId IN (71,72)
+	),
+AdvanceWarningOverlap AS
+	(
+	SELECT AdvanceWarningOverlap1.TimeStamp, AdvanceWarningOverlap1.DeviceID, AdvanceWarningOverlap1.EventID, 
+	       AdvanceWarningOverlap1.Parameter, AdvanceWarningOverlap1.EndTime
+	FROM AdvanceWarningOverlap1
+	WHERE AdvanceWarningOverlap1.EventId = 71
+	),
 categories AS (
   SELECT * FROM (VALUES
     (150, 'Transition'),
@@ -202,7 +247,10 @@ categories AS (
     (113, 'TSP Adjustment'),
 	(1, 'Green'),
 	(8, 'Yellow'),
-	(10, 'Red')
+	(10, 'Red'),
+	(176, 'Special Function'),
+	(55, 'Advance Warning Phase'),
+	(71, 'Advance Warning Overlap')
   ) AS t(EventId, Category)
 )
 
@@ -216,7 +264,7 @@ SELECT
   DATE_DIFF('millisecond', t.TimeStamp, t.EndTime)::FLOAT / 1000 AS Duration,
   --c.Category AS Category_Basic,
   CASE
-    WHEN c.Category IN ('Ped Service', 'FYA', 'Phase Call', 'Preempt', 'TSP Call', 'TSP Adjustment', 'Overlap Ped', 'Pattern Change', 'Erratic', 'Stuck On', 'Green', 'Yellow', 'Red')
+    WHEN c.Category IN ('Ped Service', 'FYA', 'Phase Call', 'Preempt', 'TSP Call', 'TSP Adjustment', 'Overlap Ped', 'Pattern Change', 'Erratic', 'Stuck On', 'Green', 'Yellow', 'Red', 'Special Function', 'Advance Warning Phase', 'Advance Warning Overlap')
       THEN c.Category || ' ' || t.Parameter
     WHEN c.Category = 'Splits'
       THEN c.Category || ' ' || (t.EventId - 299)  
@@ -246,17 +294,25 @@ FROM
   SELECT * FROM oPed3
   UNION ALL
   SELECT * FROM Coord
-  UNION ALL 
-  SELECT * FROM Splits
   UNION ALL
   SELECT * FROM PhaseCall
   UNION ALL
   SELECT * FROM FYA
+  UNION ALL 
+  SELECT * FROM Splits
+  {% if not splits_only %}
+	UNION ALL
+	SELECT * FROM Green
+	UNION ALL
+	SELECT * FROM Yellow
+	UNION ALL
+	SELECT * FROM Red
+  {% endif %}
   UNION ALL
-  SELECT * FROM Green
+  SELECT * FROM SpecialFunction
   UNION ALL
-  SELECT * FROM Yellow
+  SELECT * FROM AdvanceWarningPhase
   UNION ALL
-  SELECT * FROM Red
+  SELECT * FROM AdvanceWarningOverlap
 ) t
 LEFT JOIN categories c ON t.EventId = c.EventId

@@ -130,6 +130,14 @@ Detailed documentation for each measure is coming soon.
 
 ## Release Notes
 
+### Version 1.8.0 (August 28, 2024)
+
+#### Bug Fixes / Improvements:
+- Removed unused code from yellow_red for efficiency, but it's still not passing tests for incremental processing.
+
+#### New Features:
+- Added special functions and advance warning to timeline events.
+
 ### Version 1.7.0 (August 22, 2024)
 
 #### Bug Fixes / Improvements:
