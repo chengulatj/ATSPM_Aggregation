@@ -16,7 +16,7 @@ pip install atspm
 ```
 Or pinned to a specific version:
 ```bash
-pip install atspm==1.7.0 
+pip install atspm==1.8.2 
 ```
 `atspm` works on Python 3.10-3.12 and is tested on Ubuntu, Windows, and MacOS.
 
@@ -129,6 +129,11 @@ The following performance measures are included:
 Detailed documentation for each measure is coming soon.
 
 ## Release Notes
+
+### Version 1.8.2 (August 28, 2024)
+
+#### Bug Fixes / Improvements:
+- Fixed issue when passing unmatched events as a dataframe instead of a file path.
 
 ### Version 1.8.0 (August 28, 2024)
 

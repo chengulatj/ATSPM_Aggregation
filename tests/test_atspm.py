@@ -5,6 +5,18 @@ import shutil
 from src.atspm import SignalDataProcessor
 import duckdb
 import numpy
+import toml
+from src.atspm import __version__
+
+def test_version_consistency():
+  """Test that the version in __init__.py matches the one in pyproject.toml"""
+  # Read version from pyproject.toml
+  with open('pyproject.toml', 'r') as f:
+    pyproject = toml.load(f)
+  pyproject_version = pyproject['project']['version']
+
+  # Compare versions
+  assert __version__ == pyproject_version, f"Version mismatch: __init__.py has {__version__}, pyproject.toml has {pyproject_version}"
 
 # Define the parameters for testing
 TEST_PARAMS = {
@@ -16,10 +28,6 @@ TEST_PARAMS = {
   'output_format': 'parquet',
   'output_file_prefix': 'test_',
   'remove_incomplete': False,
-  #'unmatched_event_settings': {
-  #    'df_or_path': 'test_folder/unmatched.parquet', # for timeline, arrival_on_green & yellow_red
-  #    'split_fail_df_or_path': 'test_folder/sf_unmatched.parquet', # just for split_failures
-  #    'max_days_old': 14}, # remove unmatched events older than 14 days
   'to_sql': False,
   'verbose': 0,
   'aggregations': [
@@ -166,7 +174,7 @@ def test_incremental_aggregation(incremental_processor_output, aggregation):
   precalc_file = f"tests/precalculated/{agg_name}.parquet"
 
   for file in output_files:
-      assert os.path.exists(file), f"Incremental output file {file} not found"
+    assert os.path.exists(file), f"Incremental output file {file} not found"
   assert os.path.exists(precalc_file), f"Precalculated file for {agg_name} not found"
 
   incremental_dfs = [pd.read_parquet(file) for file in output_files]
@@ -176,9 +184,85 @@ def test_incremental_aggregation(incremental_processor_output, aggregation):
 
   # due to how split_failures imputes missing actuations there are some differences in incremental runs
   if agg_name == 'split_failures':
-      compare_dataframes_with_tolerance(combined_df, precalc_df, tolerance=0.04)
+    compare_dataframes_with_tolerance(combined_df, precalc_df, tolerance=0.04)
   else:
-      compare_dataframes(combined_df, precalc_df)
+    compare_dataframes(combined_df, precalc_df)
+
+# REPLICATING ODOT'S PRODUCTION ENVIRONMENT
+@pytest.fixture(scope="module")
+def incremental_processor_output_with_dataframes():
+  """Fixture to run the SignalDataProcessor incrementally using dataframes"""
+  data = duckdb.query("select * from 'tests/hires_test_data.parquet'").df()
+  configs = duckdb.query("select * from 'tests/configs_test_data.parquet'").df()
+  unmatched_df = None
+  sf_unmatched_df = None
+
+  chunks = {
+      '1_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 15:00:00' and timestamp < '2024-05-13 15:15:00'").df(),
+      '2_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 15:15:00' and timestamp < '2024-05-13 15:30:00'").df(),
+      '3_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 15:30:00' and timestamp < '2024-05-13 15:45:00'").df(),
+      '4_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 15:45:00' and timestamp < '2024-05-13 16:00:00'").df(),
+      '5_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 16:00:00' and timestamp < '2024-05-13 16:15:00'").df(),
+      '6_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 16:15:00' and timestamp < '2024-05-13 16:30:00'").df(),
+      '7_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 16:30:00' and timestamp < '2024-05-13 16:45:00'").df(),
+      '8_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 16:45:00' and timestamp < '2024-05-13 17:00:00'").df(),
+      '9_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 17:00:00' and timestamp < '2024-05-13 17:15:00'").df(),
+      '10_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 17:15:00' and timestamp < '2024-05-13 17:30:00'").df(),
+      '11_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 17:30:00' and timestamp < '2024-05-13 17:45:00'").df(),
+      '12_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 17:45:00' and timestamp < '2024-05-13 18:00:00'").df(),
+  }
+
+  results = {}
+
+  for i, chunk in chunks.items():
+    params = TEST_PARAMS.copy()
+    params.update({
+        'raw_data': chunk,
+        'detector_config': configs,
+        'unmatched_event_settings': {
+            'df_or_path': unmatched_df,
+            'split_fail_df_or_path': sf_unmatched_df,
+            'max_days_old': 14
+        },
+        'verbose': 2,
+        'aggregations': INCREMENTAL_AGGREGATIONS
+    })
+    processor = SignalDataProcessor(**params)
+    processor.load()
+    processor.aggregate()
+
+    # Store results for each aggregation
+    for agg in INCREMENTAL_AGGREGATIONS:
+        agg_name = agg['name']
+        if agg_name not in results:
+            results[agg_name] = []
+        results[agg_name].append(processor.conn.sql(f"select * from {agg_name}").df())
+
+    # Update unmatched dataframes for next iteration
+    unmatched_df = processor.conn.sql("select * from unmatched_events").df()
+    sf_unmatched_df = processor.conn.sql("select * from sf_unmatched").df()
+
+  return results
+
+@pytest.mark.parametrize("aggregation", INCREMENTAL_AGGREGATIONS, ids=lambda x: x['name'])
+def test_incremental_aggregation_with_dataframes(incremental_processor_output_with_dataframes, aggregation):
+  """Test each aggregation for incremental runs using dataframes"""
+  agg_name = aggregation['name']
+  incremental_results = incremental_processor_output_with_dataframes[agg_name]
+  precalc_file = f"tests/precalculated/{agg_name}.parquet"
+
+  assert len(incremental_results) == 12, f"Expected 12 chunks of results for {agg_name}"
+  assert os.path.exists(precalc_file), f"Precalculated file for {agg_name} not found"
+
+  combined_df = pd.concat(incremental_results).drop_duplicates().reset_index(drop=True)
+  precalc_df = pd.read_parquet(precalc_file)
+
+  # due to how split_failures imputes missing actuations there are some differences in incremental runs
+  if agg_name == 'split_failures':
+    compare_dataframes_with_tolerance(combined_df, precalc_df, tolerance=0.04)
+  else:
+    compare_dataframes(combined_df, precalc_df)
+
 
 if __name__ == "__main__":
   pytest.main([__file__])

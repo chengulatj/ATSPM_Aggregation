@@ -50,11 +50,19 @@ def load_data(conn,
             where_clause = f" WHERE TimeStamp > TIMESTAMP '{min_timestamp}' - INTERVAL '{max_days_old} days'"
             # Iterate over the strings/dataframes in unmatched_events dictionary
             for key, value in unmatched_events.items():
+                if isinstance(value, str):
+                    reference = value
+                else:
+                    # Create a pointer for DuckDB
+                    reference = 'unmatched_df'
+                    unmatched_df = value
+
                 # Create view that unions the previous unmatched events with the new ones
                 if key == 'df_or_path':
                     load_sql = f"""
                     CREATE TABLE unmatched_previous AS
-                    SELECT * FROM {value} {where_clause};
+                    SELECT TimeStamp::DATETIME as TimeStamp, DeviceId as DeviceId, EventId::INT16 as EventId, Parameter::INT16 as Parameter
+                    FROM {reference} {where_clause};
                     CREATE VIEW raw_data_all AS
                     SELECT * FROM raw_data
                     UNION ALL
@@ -63,11 +71,13 @@ def load_data(conn,
                 elif key == 'split_fail_df_or_path':
                     load_sql = f"""
                     CREATE TABLE sf_unmatched_previous AS
-                    SELECT * FROM {value} {where_clause}
+                    SELECT TimeStamp::DATETIME as TimeStamp, DeviceId as DeviceId, EventId::INT16 as EventId, Detector::INT16 as Detector, Phase::INT16 as Phase
+                    FROM {reference} {where_clause}
                     """
                 else:
                     raise ValueError(f"Unmatched events key '{key}' not recognized.")
-                v_print(f"Loading unmatched events {value}", verbose, 2)
+                v_print(f"Loading unmatched events:  \n{reference}\n", verbose, 2)
+                v_print(f'Executing SQL to load unmatched events: \n{load_sql}', verbose, 2)
                 conn.query(load_sql)
 
     except Exception as e:

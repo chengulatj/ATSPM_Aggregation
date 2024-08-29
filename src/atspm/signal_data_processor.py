@@ -127,11 +127,14 @@ class SignalDataProcessor:
                 if key == 'max_days_old':
                     continue
                 if isinstance(value, str):
-                    if os.path.exists(value):
+                    if os.path.exists(value) and value != '':
                         self.unmatched_event_settings[key] = f"'{value}'"
                     else:
-                        v_print(f"Warning! unmatched_events file {value} does not exist at given path yet. This is expected if no unmatched events have been recorded (first run), and a file will be output to that path at end of this run.", self.verbose)
+                        v_print(f"Warning, {key} file '{value}' does not exist or is blank. This is expected only for the first run.", self.verbose)
                         self.unmatched_found = False
+                elif value is None:
+                    v_print(f"Warning, {key} file is None. This is expected only for the first run.", self.verbose)
+                    self.unmatched_found = False
 
         # Check if detector_health is in aggregations
         if any(d['name'] == 'detector_health' for d in self.aggregations):
@@ -199,6 +202,7 @@ class SignalDataProcessor:
 
         for aggregation in self.aggregations:
             start_time = time.time()
+            v_print(f"\nRunning {aggregation['name']} aggregation...", self.verbose, 2)
 
             #######################
             ### Detector Health ###
@@ -267,10 +271,14 @@ class SignalDataProcessor:
             if self.incremental_run and aggregation['name'] in ['timeline', 'arrival_on_green', 'yellow_red', 'split_failures']:
                 aggregation['params']['incremental_run'] = True #lets the aggregation know to save unmatched events for next run
                 if self.unmatched_found:
+                    v_print(f"Incremental run using previous events for {aggregation['name']}", self.verbose, 2)
                     aggregation['params']['unmatched'] = True #lets the aggregation know to use the unmatched events from previous run
                     # split_failures uses its own view
                     if aggregation['name'] != 'split_failures':
                         aggregation['params']['from_table'] = 'raw_data_all'
+                else:
+                    v_print(f"First Run For {aggregation['name']}", self.verbose, 2)
+                    aggregation['params']['unmatched'] = False
               
             #######################
             ### Run Aggregation ###

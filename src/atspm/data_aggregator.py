@@ -68,5 +68,5 @@ def aggregate_data(conn, aggregation_name, to_sql, **kwargs):
         return None
     except Exception as e:
         print('Error when executing query for: ', aggregation_name)
-        print(query)
+        #print(query)
         raise e
