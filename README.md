@@ -134,6 +134,7 @@ Detailed documentation for each measure is coming soon.
 
 #### Bug Fixes / Improvements:
 - Fixed issue when passing unmatched events as a dataframe instead of a file path.
+- Added more tests for incremental runs when using dataframes. This is to mimic the ODOT production environment.
 
 ### Version 1.8.0 (August 28, 2024)
 
