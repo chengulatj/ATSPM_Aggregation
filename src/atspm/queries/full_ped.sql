@@ -120,16 +120,17 @@ add_rolling_sum AS (
 --Transform to volumes
 --Estimated_Hourly = A90C * Hourly_Actuations + A90C_squared * Hourly_Actuations^2 + Intercept
 --where A90C = 0.7167, A90C_squared = 0.0599, Intercept = 1.1063
+--See docs for explanation. NOTE: Need to write docs!
 volumes AS (
     SELECT
-        * EXCLUDE (Unique_Actuations_Rolling),
-        (0.7167 * Unique_Actuations_Rolling + 0.0599 * Unique_Actuations_Rolling^2 + 1.1063)::FLOAT AS Estimated_Hourly
+        *,
+        (0.7167 * Unique_Actuations_Rolling + 0.0599 * Unique_Actuations_Rolling^2)::FLOAT AS Estimated_Hourly,
+        CASE WHEN Unique_Actuations_Rolling = 0 THEN 0 ELSE Unique_Actuations / Unique_Actuations_Rolling END AS Ratio
     FROM add_rolling_sum
 )
-SELECT *
+SELECT * EXCLUDE (Unique_Actuations_Rolling, Ratio, Estimated_Hourly),
+    (Estimated_Hourly * Ratio + (1.1063 / 4))::FLOAT AS Estimated_Volumes
 FROM volumes
---FROM T
-ORDER BY DeviceId, Phase, TimeStamp DESC
 
 {% endif %}
 

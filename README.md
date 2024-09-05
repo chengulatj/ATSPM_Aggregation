@@ -130,6 +130,11 @@ Detailed documentation for each measure is coming soon.
 
 ## Release Notes
 
+### Version 1.8.3 (August 28, 2024)
+
+#### Bug Fixes / Improvements:
+- Fixed estimated volumes for full_ped. Prviously, it was converting 15-minute ped data to hourly by applying a rolling sum, then applying the qudratic transform to get volumes, and then converted back to 15-minute by undoing the rolling sum. The bug had to do with the data not always being ordered correcly before undoing the rolling sum. However, this update removes the undo rolling sum altogether and replaces it with multiplying hourly volumes by the ratio of 15-minute data to hourly dat (more detail coming in the docs eventually). It seems to work much better now.
+
 ### Version 1.8.2 (August 28, 2024)
 
 #### Bug Fixes / Improvements:

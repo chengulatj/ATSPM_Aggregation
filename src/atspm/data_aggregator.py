@@ -1,6 +1,5 @@
 import os
 from jinja2 import Environment, FileSystemLoader
-from .utils import undo_rolling_sum
 
 def render_query(query_name, **kwargs):
     # add from_table = 'raw_data' to the kwargs dictionary
@@ -49,22 +48,6 @@ def aggregate_data(conn, aggregation_name, to_sql, **kwargs):
             return query
         # Otherwise, execute the query
         conn.query(query)
-
-        # If agg is full_ped, check if return_volume is True
-        if aggregation_name == 'full_ped':
-            if kwargs['return_volumes']:
-                # Create updated table with the volume data
-                ped_data = conn.query("SELECT * FROM full_ped").df()
-                #print('Dtypes of full_ped before adding Estimated_Volumes:\n', ped_data.dtypes)
-                ped_data['Estimated_Volumes'] = ped_data.groupby(['DeviceId', 'Phase'])['Estimated_Hourly'].transform(undo_rolling_sum)
-                #print('Dtypes of full_ped after adding Estimated_Volumes:\n', ped_data.dtypes)
-                sql = """
-                    CREATE OR REPLACE TABLE full_ped AS
-                    SELECT * EXCLUDE (Estimated_Hourly)
-                    FROM ped_data
-                    WHERE PedServices >0 OR PedActuation >0 OR Unique_Actuations >0 OR Estimated_Volumes
-                    """
-                conn.query(sql)
         return None
     except Exception as e:
         print('Error when executing query for: ', aggregation_name)
