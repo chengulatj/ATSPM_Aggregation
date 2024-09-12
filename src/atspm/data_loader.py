@@ -47,7 +47,7 @@ def load_data(conn,
             max_days_old = unmatched_events['max_days_old']
             unmatched_events.pop('max_days_old')
             # Create a WHERE clause to filter out old events
-            where_clause = f" WHERE TimeStamp > TIMESTAMP '{min_timestamp}' - INTERVAL '{max_days_old} days'"
+            where_clause = f" WHERE TimeStamp::DATETIME > TIMESTAMP '{min_timestamp}' - INTERVAL '{max_days_old} days'"
             # Iterate over the strings/dataframes in unmatched_events dictionary
             for key, value in unmatched_events.items():
                 if isinstance(value, str):

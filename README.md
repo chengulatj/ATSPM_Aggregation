@@ -1,11 +1,14 @@
 # ATSPM Aggregation
 
-`atspm` is a production-ready Python package to transform hi-res ATC signal controller data into aggregate ATSPMs (Automated Traffic Signal Performance Measures). It runs locally using the powerful & lightweight [DuckDB](https://duckdb.org/) SQL engine.
+`atspm` is a lightweight production-ready Python package to efficiently transform traffic signal controller event logs into Aggregate Traffic Signal Performance Measures. 
+
+This project focuses only on transforming event logs into performance measures and troubleshooting data, it does include data visualization. Feel free to submit feature requests or bug reports or to reach out with questions or comments. Contributions are welcome! 
 
 ## Features
 
-- Transforms hi-res ATC signal controller data into aggregate ATSPMs
+- Transforms event logs into aggregate performance measures and troubleshooting metrics
 - Supports incremental processing for real-time data (ie. every 15 minutes)
+- Runs locally using the powerful [DuckDB](https://duckdb.org/) analytical SQL engine.
 - Output to user-defined folder structure and file format (csv/parquet/json), or query DuckDB tables directly
 - Deployed in production by Oregon DOT since July 2024
 
@@ -16,18 +19,18 @@ pip install atspm
 ```
 Or pinned to a specific version:
 ```bash
-pip install atspm==1.8.2 
+pip install atspm==1.x.x 
 ```
 `atspm` works on Python 3.10-3.12 and is tested on Ubuntu, Windows, and MacOS.
 
 ## Quick Start
 
-Try out a self-contained example in Colab!<br>
+The best place to start is with these self-contained example uses in Colab!<br>
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/14SPXPjpwbBEPpjKBN5s4LoqtHWSllvip?usp=sharing)
 
-## Detailed Usage
+## Example Usage
 
-Here's a simple example of how to use `atspm`:
+Here's an example of how to use `atspm` (but see the Colab link above for more examples):
 
 ```python
 # Import libraries
@@ -130,10 +133,15 @@ Detailed documentation for each measure is coming soon.
 
 ## Release Notes
 
+### Version 1.8.4 (September 12, 2024)
+
+#### Bug Fixes / Improvements:
+Fixed a timestamp conversion issue when reading unmatched events from a csv file. Updated the unit tests to catch this issue in the future. 
+
 ### Version 1.8.3 (September 5, 2024)
 
 #### Bug Fixes / Improvements:
-- Fixed estimated volumes for full_ped. Prviously, it was converting 15-minute ped data to hourly by applying a rolling sum, then applying the qudratic transform to get volumes, and then converted back to 15-minute by undoing the rolling sum. The bug had to do with the data not always being ordered correcly before undoing the rolling sum. However, this update removes the undo rolling sum altogether and replaces it with multiplying hourly volumes by the ratio of 15-minute data to hourly dat (more detail coming in the docs eventually). It seems to work much better now.
+- Fixed estimated volumes for full_ped. Previously, it was converting 15-minute ped data to hourly by applying a rolling sum, then applying the quadratic transform to get volumes, and then converted back to 15-minute by undoing the rolling sum. The bug had to do with the data not always being ordered correctly before undoing the rolling sum. However, this update removes the undo rolling sum altogether and replaces it with multiplying hourly volumes by the ratio of 15-minute data to hourly data (more detail coming in the docs eventually). It seems to work much better now.
 
 ### Version 1.8.2 (August 29, 2024)
 
@@ -167,7 +175,7 @@ Detailed documentation for each measure is coming soon.
 
 ## Contributing
 
-Ideas and contributions are welcome! Please feel free to submit a Pull Request.
+Ideas and contributions are welcome! Please feel free to submit a Pull Request. Note that GitHub Actions will automatically run unit tests on your code.
 
 ## License
 

@@ -194,8 +194,8 @@ def incremental_processor_output_with_dataframes():
   """Fixture to run the SignalDataProcessor incrementally using dataframes"""
   data = duckdb.query("select * from 'tests/hires_test_data.parquet'").df()
   configs = duckdb.query("select * from 'tests/configs_test_data.parquet'").df()
-  unmatched_df = None
-  sf_unmatched_df = None
+  unmatched_df = ''
+  sf_unmatched_df = ''
 
   chunks = {
       '1_chunk': duckdb.sql("select * from data where timestamp >= '2024-05-13 15:00:00' and timestamp < '2024-05-13 15:15:00'").df(),
@@ -224,7 +224,7 @@ def incremental_processor_output_with_dataframes():
             'split_fail_df_or_path': sf_unmatched_df,
             'max_days_old': 14
         },
-        'verbose': 2,
+        'verbose': 0,
         'aggregations': INCREMENTAL_AGGREGATIONS
     })
     processor = SignalDataProcessor(**params)
@@ -241,6 +241,14 @@ def incremental_processor_output_with_dataframes():
     # Update unmatched dataframes for next iteration
     unmatched_df = processor.conn.sql("select * from unmatched_events").df()
     sf_unmatched_df = processor.conn.sql("select * from sf_unmatched").df()
+
+    # Write unmatched dataframes to disk as csv
+    unmatched_df.to_csv('unmatched_df_temp.csv')
+    sf_unmatched_df.to_csv('sf_unmatched_df_temp.csv')
+
+    # Read unmatched dataframes back from disk
+    unmatched_df = pd.read_csv('unmatched_df_temp.csv')
+    sf_unmatched_df = pd.read_csv('sf_unmatched_df_temp.csv')
 
   return results
 
