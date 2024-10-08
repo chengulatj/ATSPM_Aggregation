@@ -11,7 +11,7 @@ def load_data(conn,
     # Load Raw Data
     load_sql = """
         CREATE TABLE raw_data AS
-        SELECT TimeStamp::DATETIME as TimeStamp, DeviceId as DeviceId, EventId::INT16 as EventId, Parameter::INT16 as Parameter
+        SELECT DISTINCT TimeStamp::DATETIME as TimeStamp, DeviceId as DeviceId, EventId::INT16 as EventId, Parameter::INT16 as Parameter
         """
     # From statment is used to load data from a file or a string (as DataFrame)
     if raw_data is not None:
